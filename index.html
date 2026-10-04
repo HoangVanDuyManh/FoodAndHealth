@@ -16,6 +16,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <!-- API Client kết nối SQL Server -->
   <script src="api.js"></script>
+  <!-- Module AI dùng chung với meal-suggest (rank + generateDishes, gọi Gemini trực tiếp, không chạm backend) -->
+  <script src="meal-suggest/full-menus.js"></script>
+  <script src="meal-suggest/single-dishes.js"></script>
+  <script src="meal-suggest/ai-rank.js"></script>
 
   <script>
     tailwind.config = {
@@ -540,6 +544,17 @@
               </button>
             </div>
 
+            <!-- Toggle Mâm cơm / Món lẻ mua ngoài -->
+            <div class="flex p-1 bg-slate-100 rounded-xl">
+              <button id="btn-dish-combo" onclick="switchDishMode('combo')" class="px-4 py-1.5 text-xs font-bold rounded-lg bg-white text-slate-900 shadow-sm flex items-center gap-1.5 transition-all">
+                <span>🍱</span> <span>Mâm cơm</span>
+              </button>
+              <button id="btn-dish-single" onclick="switchDishMode('single')" class="px-4 py-1.5 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-900 flex items-center gap-1.5 transition-all">
+                <span>🍢</span> <span>Món lẻ mua ngoài</span>
+              </button>
+            </div>
+            <input id="main-max-price" type="number" min="0" step="1000" placeholder="Giá tối đa (đ)" title="Ngân sách tối đa mỗi phần — áp dụng khi bấm Gợi ý (chế độ món lẻ)" class="hidden w-36 px-2.5 py-2 border border-slate-200 rounded-xl text-xs text-center font-bold" onchange="mainMaxPriceChange(this.value)">
+
             <!-- Nút xem Lịch sử -->
             <button onclick="openMealHistoryModal()" class="px-3.5 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold rounded-xl text-xs border border-slate-200 flex items-center gap-1.5 transition-all">
               <i data-lucide="history" class="w-4 h-4 text-slate-500"></i>
@@ -564,6 +579,13 @@
             <button id="btn-refresh-meals" onclick="generateMealSuggestions(true)" title="Đổi sang 3 thực đơn khác" class="hidden px-4 py-2.5 bg-white hover:bg-slate-100 text-slate-700 font-bold rounded-xl text-xs border border-slate-200 flex items-center gap-2 shadow-sm transition-all">
               <i data-lucide="refresh-cw" class="w-4 h-4 text-brand-600"></i>
               <span>Đổi thực đơn khác</span>
+            </button>
+            <button id="btn-ai-create-main" onclick="aiCreateMainDishes()" title="AI sáng tạo thêm mâm cơm mới (lưu local, dùng chung với module meal-suggest)" class="px-4 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-md shadow-violet-600/20 transition-all">
+              <i data-lucide="sparkles" class="w-4 h-4"></i>
+              <span>✨ AI tạo thêm món</span>
+            </button>
+            <button id="btn-ai-clear-main" onclick="aiClearMainDishes()" title="Xóa toàn bộ món do AI tạo" class="hidden px-3 py-2.5 bg-white hover:bg-slate-100 text-slate-500 font-bold rounded-xl text-xs border border-slate-200 items-center gap-1.5 transition-all">
+              <span>🗑 Xóa món AI</span>
             </button>
             <button id="btn-generate-ai" onclick="generateMealSuggestions(false)" class="px-5 py-2.5 bg-brand-500 hover:bg-brand-600 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-md shadow-emerald-500/20 transition-all">
               <i data-lucide="sparkles" class="w-4 h-4"></i>
@@ -640,6 +662,16 @@
             <i data-lucide="clock" class="w-4 h-4"></i>
             <span>Để tôi suy nghĩ / Quyết định sau</span>
           </button>
+        </div>
+
+        <!-- THỰC ĐƠN TỔNG DÙNG CHUNG (kho gốc MS_FULL_MENUS + món AI localStorage ms_ai_dishes) -->
+        <div class="p-4 sm:p-5 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h4 class="font-extrabold text-sm text-slate-800">📚 Thực đơn tổng dùng chung — <span id="main-full-count" class="text-brand-600">…</span></h4>
+            <span id="main-ai-count" class="text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-lg">✨ 0 món AI</span>
+          </div>
+          <p class="text-xs text-slate-500">Kho món gốc + món do AI sáng tạo (lưu local key <b>ms_ai_dishes</b>, dùng chung với module meal-suggest). Đang lọc theo <b id="main-full-mode">bữa đang xem</b> — chuyển tab Trưa/Tối để xem bữa còn lại. Món ở đây chỉ để tham khảo (sao chép), không bấm Chọn như 3 gợi ý hôm nay.</p>
+          <div id="main-full-options" class="grid grid-cols-1 lg:grid-cols-3 gap-4"></div>
         </div>
 
       </section>
@@ -1922,7 +1954,6 @@
       const bannerIcon = document.getElementById('meal-banner-icon');
       const bannerTitle = document.getElementById('meal-banner-title');
       const bannerDesc = document.getElementById('meal-banner-desc');
-      const bannerKcal = document.getElementById('meal-banner-kcal');
 
       const targetKcal = Number(userProfile.targetKcal) || 1500;
 
@@ -1932,16 +1963,14 @@
         bannerIcon.innerText = "☀️";
         bannerTitle.innerText = "Chế độ: Bữa Trưa (Năng lượng dồi dào, ăn no làm việc chiều)";
         const lKcal = Math.round(targetKcal * 0.40);
-        bannerKcal.innerText = `~${lKcal} kcal`;
-        bannerDesc.innerHTML = `Định mức calo khuyến nghị: <b class="text-brand-600">~${lKcal} kcal</b> (38-42% calo ngày). 3 lựa chọn đa dạng nguồn đạm (Gia súc, Thủy hải sản, Gia cầm) & đổi vị tinh bột.`;
+        bannerDesc.innerHTML = `Định mức calo khuyến nghị: <b id="meal-banner-kcal" class="text-brand-600">~${lKcal} kcal</b> (38-42% calo ngày). 3 lựa chọn đa dạng nguồn đạm (Gia súc, Thủy hải sản, Gia cầm) & đổi vị tinh bột.`;
       } else {
         btnDinner.className = "px-4 py-1.5 text-xs font-bold rounded-lg bg-white text-slate-900 shadow-sm flex items-center gap-1.5 transition-all";
         btnLunch.className = "px-4 py-1.5 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-900 flex items-center gap-1.5 transition-all";
         bannerIcon.innerText = "🌙";
         bannerTitle.innerText = "Chế độ: Bữa Tối (Thanh đạm, dễ tiêu hóa, tránh đầy bụng ban đêm)";
         const dKcal = Math.round(targetKcal * 0.30);
-        bannerKcal.innerText = `~${dKcal} kcal`;
-        bannerDesc.innerHTML = `Định mức calo khuyến nghị: <b class="text-teal-600">~${dKcal} kcal</b> (28-32% calo ngày). Món hấp/luộc, đạm dễ tiêu, canh thanh nhiệt giúp ngủ sâu giấc.`;
+        bannerDesc.innerHTML = `Định mức calo khuyến nghị: <b id="meal-banner-kcal" class="text-teal-600">~${dKcal} kcal</b> (28-32% calo ngày). Món hấp/luộc, đạm dễ tiêu, canh thanh nhiệt giúp ngủ sâu giấc.`;
       }
 
       renderCurrentMealMode();
@@ -1949,6 +1978,7 @@
 
     // Hiển thị dữ liệu thực đơn theo chế độ hiện tại
     function renderCurrentMealMode() {
+      if (currentDishMode === 'single') { renderSingleMode(); return; }
       const mealData = todayMealsCache[currentMealMode];
       const container = document.getElementById('meal-options-container');
       const boxThink = document.getElementById('box-think-later');
@@ -1976,6 +2006,7 @@
         if (btnRefresh) btnRefresh.classList.add('hidden');
         document.getElementById('meal-macro-legend')?.classList.add('hidden');
         btnGenText.innerText = `Gợi ý 3 thực đơn ngay`;
+        if (typeof renderMainFullMenus === 'function') renderMainFullMenus();
         lucide.createIcons();
         return;
       }
@@ -2091,11 +2122,269 @@
         `;
       }).join('');
 
+      if (typeof renderMainFullMenus === 'function') renderMainFullMenus();
       lucide.createIcons();
+    }
+
+    // Render 3 card MÓN LẺ mua ngoài (badge giá + nút Quán gần nhất).
+    function renderSingleMode() {
+      const data = singleCache[currentMealMode];
+      const container = document.getElementById('meal-options-container');
+      const boxThink = document.getElementById('box-think-later');
+      const statusAlert = document.getElementById('meal-status-alert');
+      const statusText = document.getElementById('meal-status-text');
+      const statusBadge = document.getElementById('meal-status-badge');
+      const statusIcon = document.getElementById('meal-status-icon');
+      const btnGenText = document.getElementById('btn-generate-text');
+      const btnRefresh = document.getElementById('btn-refresh-meals');
+      const mealName = currentMealMode === 'lunch' ? 'Bữa trưa' : 'Bữa tối';
+      if (btnGenText) btnGenText.innerText = 'Gợi ý 3 món mua ngoài';
+
+      if (!data || !data.options || data.options.length === 0) {
+        container.innerHTML = `
+          <div class="col-span-full py-12 text-center bg-slate-50 border border-dashed border-slate-200 rounded-3xl space-y-3">
+            <span class="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 inline-flex items-center justify-center text-2xl">🍢</span>
+            <h4 class="font-bold text-sm text-slate-700">Chưa có gợi ý món mua ngoài cho ${mealName} hôm nay</h4>
+            <p class="text-xs text-slate-400 max-w-md mx-auto">${mainMaxPrice > 0 ? `Ngân sách hiện tại: ≤ ${mainFmtPrice(mainMaxPrice)}/phần.` : 'Món lẻ lọc theo giá tiền + kcal, không xét nguyên liệu ở nhà.'} Nhấn nút <b>"Gợi ý 3 món mua ngoài"</b> để xem quán nào hợp túi tiền.</p>
+            <button onclick="generateSingleSuggestions(false)" class="px-5 py-2.5 bg-brand-500 hover:bg-brand-600 text-white font-bold rounded-xl text-xs shadow-sm">
+              Gợi ý món mua ngoài ngay
+            </button>
+          </div>`;
+        if (boxThink) boxThink.classList.add('hidden');
+        if (statusAlert) statusAlert.classList.add('hidden');
+        if (btnRefresh) btnRefresh.classList.add('hidden');
+        document.getElementById('meal-macro-legend')?.classList.add('hidden');
+        if (typeof renderMainFullMenus === 'function') renderMainFullMenus();
+        lucide.createIcons();
+        return;
+      }
+
+      if (boxThink) boxThink.classList.remove('hidden');
+      if (statusAlert) statusAlert.classList.remove('hidden');
+      if (btnRefresh) btnRefresh.classList.remove('hidden');
+      document.getElementById('meal-macro-legend')?.classList.remove('hidden');
+
+      if (data.selectedOption) {
+        const chosen = data.options[data.selectedOption - 1];
+        statusAlert.className = "p-3 rounded-xl text-xs font-semibold flex items-center justify-between bg-emerald-50 text-emerald-800 border border-emerald-200";
+        statusIcon.setAttribute('data-lucide', 'check-circle');
+        statusText.innerHTML = `Bạn đã chốt món mua ngoài <b>Lựa chọn ${data.selectedOption}${chosen ? ': ' + chosen.title : ''}</b> (chỉ lưu trên trình duyệt)`;
+        statusBadge.className = "px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-200 text-emerald-900";
+        statusBadge.innerText = "Đã chốt món";
+      } else {
+        statusAlert.className = "p-3 rounded-xl text-xs font-semibold flex items-center justify-between bg-amber-50 text-amber-800 border border-amber-200";
+        statusIcon.setAttribute('data-lucide', 'hourglass');
+        statusText.innerHTML = `Trạng thái: <b>Đang suy nghĩ / cân nhắc</b>. Món lẻ chỉ lưu trên trình duyệt, không đồng bộ máy chủ.`;
+        statusBadge.className = "px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-200 text-amber-900";
+        statusBadge.innerText = "Đang chờ";
+      }
+
+      container.innerHTML = data.options.map((opt, index) => {
+        const optNum = index + 1;
+        const isSelected = data.selectedOption === optNum;
+        let tagColor = "bg-emerald-50 text-emerald-700 border-emerald-200";
+        if (optNum === 2) tagColor = "bg-blue-50 text-blue-700 border-blue-200";
+        if (optNum === 3) tagColor = "bg-purple-50 text-purple-700 border-purple-200";
+        return `
+          <div class="border-2 ${isSelected ? 'border-brand-500 ring-4 ring-emerald-500/10 shadow-lg' : 'border-slate-200 hover:border-brand-400'} rounded-3xl p-5 bg-white flex flex-col justify-between space-y-4 transition-all relative">
+            ${isSelected ? '<span class="absolute -top-3 right-4 bg-brand-500 text-white text-[10px] font-black px-3 py-0.5 rounded-full shadow-sm">Đã chọn món này</span>' : ''}
+            <div class="space-y-3.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] font-extrabold uppercase px-2.5 py-0.5 rounded-lg border ${tagColor}">
+                  Lựa chọn ${optNum}
+                </span>
+                <div class="text-right">
+                  <span class="text-base font-black text-slate-800">${opt.calories}</span>
+                  <span class="text-[11px] text-slate-400">kcal</span>
+                </div>
+              </div>
+              <div>
+                <h4 class="font-extrabold text-sm text-slate-800 line-clamp-2">${opt.title}</h4>
+                ${opt.price ? `<div class="mt-1.5 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 w-fit">💰 Giá tham khảo: ${mainFmtPrice(opt.price)}/phần</div>` : ''}
+                <div class="flex items-center gap-2 text-[11px] text-slate-600 mt-1.5 flex-wrap">
+                  <span class="px-2 py-0.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200/80 font-semibold">🌾 <b class="font-bold text-slate-900">${opt.macros?.carbs || 0}g</b></span>
+                  <span class="px-2 py-0.5 rounded-lg bg-rose-50 text-rose-900 border border-rose-200/80 font-semibold">🥩 <b class="font-bold text-slate-900">${opt.macros?.protein || 0}g</b></span>
+                  <span class="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200/80 font-semibold">🥑 <b class="font-bold text-slate-900">${opt.macros?.fat || 0}g</b></span>
+                </div>
+              </div>
+              <div class="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-100 space-y-2 text-xs">
+                <div class="flex items-start gap-2"><span class="text-rose-600 font-bold shrink-0">🍖 Có gì:</span><span class="font-semibold text-slate-800">${opt.protein || '—'}</span></div>
+                <div class="flex items-start gap-2"><span class="text-amber-600 font-bold shrink-0">🍚 Tinh bột:</span><span class="font-semibold text-slate-800">${opt.carb || '—'}</span></div>
+                <div class="flex items-start gap-2"><span class="text-blue-600 font-bold shrink-0">🥣 Nước chấm/dùng:</span><span class="font-semibold text-slate-800">${opt.soup || '—'}</span></div>
+                <div class="flex items-start gap-2"><span class="text-emerald-600 font-bold shrink-0">🥗 Ăn kèm:</span><span class="font-semibold text-slate-800">${opt.veggie || '—'}</span></div>
+              </div>
+              <p class="text-[11px] text-slate-500 italic">💡 ${opt.nutritionNotes || 'Món mua ngoài quán, nhớ ăn kèm rau.'}</p>
+              ${opt.aiReason ? `<p class="text-[11px] font-semibold text-violet-700 bg-violet-50 border border-violet-200 rounded-lg px-2 py-1">✨ AI chọn vì: ${opt.aiReason}</p>` : ''}
+            </div>
+            <div class="pt-3 border-t border-slate-100 space-y-2">
+              <button onclick="openNearbyMap('${String(opt.title || '').replace(/'/g, "\\'")}')" class="w-full py-2 rounded-xl text-xs font-bold bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 transition-all">📍 Quán gần nhất</button>
+              <button onclick="handleSelectSingle(${optNum})" class="w-full py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${isSelected ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20' : 'bg-slate-900 hover:bg-slate-800 text-white'}">
+                <span>${isSelected ? 'Đang áp dụng món này' : `Chọn Lựa chọn ${optNum}`}</span>
+              </button>
+            </div>
+          </div>`;
+      }).join('');
+
+      if (typeof renderMainFullMenus === 'function') renderMainFullMenus();
+      lucide.createIcons();
+    }
+
+    // ========================================================================
+    // MÓN LẺ MUA NGOÀI (client-only, dùng chung kho MS_SINGLE_DISHES với module
+    // meal-suggest). Gợi ý 3 món theo giá/kcal + AI xếp hạng (không cần key vẫn
+    // có thứ hạng chuyên gia). Chọn món lẻ chỉ chốt local + mở Google Maps tìm
+    // quán gần nhất — KHÔNG gọi backend (backend expect option 1-3 mâm cơm).
+    // ========================================================================
+    let currentDishMode = 'combo'; // 'combo' = mâm cơm backend | 'single' = món lẻ
+    let mainMaxPrice = 0;
+    let singleCache = { lunch: null, dinner: null };
+    let singleAiOrder = { lunch: null, dinner: null };
+    let singleAiReasons = { lunch: [], dinner: [] };
+    let singleAiPoolKey = { lunch: '', dinner: '' };
+    let singleSuggestOffset = { lunch: 0, dinner: 0 };
+
+    function mainFmtPrice(v) {
+      const n = Number(v) || 0;
+      return n > 0 ? `${n.toLocaleString('vi-VN')}đ` : 'chưa rõ giá';
+    }
+
+    function openNearbyMap(title) {
+      if (!title) return;
+      const q = encodeURIComponent(`${title} gần đây`);
+      window.open(`https://www.google.com/maps/search/?api=1&query=${q}`, '_blank', 'noopener');
+    }
+
+    function singleEnrich(m) {
+      const targetKcal = Number(userProfile.targetKcal) || 1500;
+      const cal = Math.round(targetKcal * (m.cal_pct || 0.40));
+      return Object.assign({}, m, {
+        calories: cal,
+        macros: {
+          carbs: Math.round((cal * 0.50) / 4),
+          protein: Math.round((cal * 0.25) / 4),
+          fat: Math.round((cal * 0.25) / 9)
+        }
+      });
+    }
+
+    // Pool món lẻ: mealType "all" hợp cả trưa lẫn tối, lọc theo giá + kcal.
+    function singlePool(mealMode) {
+      const mm = mealMode || currentMealMode;
+      if (typeof MS_SINGLE_DISHES === 'undefined') return [];
+      let list = MS_SINGLE_DISHES.map((m) => singleEnrich(m))
+        .filter((m) => m.mealType === mm || m.mealType === 'all');
+      if (mainMaxPrice > 0) list = list.filter((m) => Number(m.price || 0) > 0 && Number(m.price) <= mainMaxPrice);
+      list.sort((a, b) => (a.price || 0) - (b.price || 0) || a.calories - b.calories);
+      return list;
+    }
+
+    function mainMaxPriceChange(v) {
+      mainMaxPrice = Number(v) || 0;
+    }
+
+    function switchDishMode(mode) {
+      currentDishMode = mode;
+      const btnCombo = document.getElementById('btn-dish-combo');
+      const btnSingle = document.getElementById('btn-dish-single');
+      const priceInput = document.getElementById('main-max-price');
+      const isSingle = mode === 'single';
+      if (btnCombo) btnCombo.className = "px-4 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all " + (!isSingle ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900');
+      if (btnSingle) btnSingle.className = "px-4 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all " + (isSingle ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900');
+      if (priceInput) priceInput.classList.toggle('hidden', !isSingle);
+      const genText = document.getElementById('btn-generate-text');
+      if (genText) genText.innerText = isSingle ? 'Gợi ý 3 món mua ngoài' : 'Gợi ý 3 thực đơn ngay';
+      singleAiOrder[currentMealMode] = null;
+      singleAiPoolKey[currentMealMode] = '';
+      singleSuggestOffset[currentMealMode] = 0;
+      renderCurrentMealMode();
+    }
+
+    // Gợi ý 3 món lẻ: xếp hạng AI toàn bộ pool một lần, nút Đổi xoay vòng.
+    async function generateSingleSuggestions(forceRefresh = false) {
+      if (typeof MS_SINGLE_DISHES === 'undefined') {
+        alert('Chưa tải được kho món lẻ (meal-suggest/single-dishes.js) — kiểm tra kết nối file.');
+        return;
+      }
+      const pool = singlePool(currentMealMode);
+      if (pool.length === 0) {
+        singleCache[currentMealMode] = { options: [], selectedOption: null, status: 'pending' };
+        renderCurrentMealMode();
+        alert(mainMaxPrice > 0
+          ? `Không món mua ngoài nào dưới ${mainFmtPrice(mainMaxPrice)}/phần cho bữa này. Thử tăng ngân sách.`
+          : 'Không món mua ngoài nào khớp bộ lọc hiện tại.');
+        return;
+      }
+      const key = localStorage.getItem('nutrifit_gemini_key') || '';
+      const poolKey = `${pool.length}:${mainMaxPrice}:${pool.map((m) => m.title).join('|')}`;
+      let order;
+      if (!forceRefresh || !singleAiOrder[currentMealMode] || singleAiPoolKey[currentMealMode] !== poolKey) {
+        const ranked = (typeof MS_AI_RANK !== 'undefined')
+          ? await MS_AI_RANK.rank(pool.map((opt) => ({ opt })), currentMealMode, [], key, { dishMode: 'single', maxPrice: mainMaxPrice })
+          : { order: pool.map((_, i) => i), reasons: [], source: 'expert' };
+        order = ranked.order;
+        singleAiOrder[currentMealMode] = order;
+        singleAiReasons[currentMealMode] = ranked.reasons || [];
+        singleAiPoolKey[currentMealMode] = poolKey;
+        singleSuggestOffset[currentMealMode] = 0;
+      } else {
+        order = singleAiOrder[currentMealMode];
+      }
+      if (!Array.isArray(order) || order.length !== pool.length) {
+        order = pool.map((_, i) => i);
+        singleAiOrder[currentMealMode] = order;
+        singleAiPoolKey[currentMealMode] = poolKey;
+        singleSuggestOffset[currentMealMode] = 0;
+      }
+      let off = singleSuggestOffset[currentMealMode] || 0;
+      off = pool.length > 0 ? off % pool.length : 0;
+      const n = Math.min(3, pool.length);
+      const three = [];
+      for (let i = 0; i < n; i++) {
+        const pos = order[(off + i) % order.length];
+        const opt = Object.assign({}, pool[pos], { id: i + 1 });
+        const reason = (singleAiReasons[currentMealMode] || [])[(off + i) % order.length] || '';
+        if (reason) opt.aiReason = reason;
+        three.push(opt);
+      }
+      singleSuggestOffset[currentMealMode] = pool.length > 0 ? (off + n) % pool.length : 0;
+      singleCache[currentMealMode] = { options: three, selectedOption: null, status: 'pending' };
+      renderCurrentMealMode();
+      showToast(pool.length <= 3
+        ? `Hiển thị tất cả ${pool.length} món mua ngoài bữa này`
+        : `Đã gợi ý 3 món mua ngoài (bấm tiếp "Đổi thực đơn khác" để xem tiếp)`,
+        mainMaxPrice > 0 ? `Ngân sách ≤ ${mainFmtPrice(mainMaxPrice)}/phần` : 'Sắp xếp giá rẻ trước');
+    }
+
+    // Chọn món lẻ: chốt local + mở Maps — không gọi backend cũ.
+    function handleSelectSingle(optionNum) {
+      const data = singleCache[currentMealMode];
+      if (!data || !data.options || !data.options[optionNum - 1]) return;
+      data.selectedOption = optionNum;
+      data.status = 'decided';
+      renderCurrentMealMode();
+      const title = data.options[optionNum - 1] ? data.options[optionNum - 1].title : '';
+      showToast(`Đã chốt món mua ngoài Lựa chọn ${optionNum}`, title ? `${title} — đang mở Google Maps tìm quán gần nhất...` : '');
+      openNearbyMap(title);
     }
 
     // GỌI AI GEMINI SINH MÓN
     async function generateMealSuggestions(forceRefresh = false) {
+      // Chế độ món lẻ: gợi ý local từ kho quán ngoài (AI xếp hạng, không key
+      // vẫn chạy thứ hạng chuyên gia) — không gọi backend mâm cơm.
+      if (currentDishMode === 'single') {
+        const btnS = forceRefresh ? document.getElementById('btn-refresh-meals') : document.getElementById('btn-generate-ai');
+        const origS = btnS ? btnS.innerHTML : '';
+        if (btnS) {
+          btnS.innerHTML = `<i data-lucide="loader" class="w-4 h-4 animate-spin"></i><span>${forceRefresh ? 'Đang đổi món...' : 'AI đang chọn món mua ngoài...'}</span>`;
+          lucide.createIcons();
+        }
+        try {
+          await generateSingleSuggestions(forceRefresh);
+        } finally {
+          if (btnS) { btnS.innerHTML = origS; lucide.createIcons(); }
+        }
+        return;
+      }
       const btn = forceRefresh ? document.getElementById('btn-refresh-meals') : document.getElementById('btn-generate-ai');
       const originalText = btn ? btn.innerHTML : '';
       if (btn) {
@@ -2170,6 +2459,168 @@
       if (badge) {
         badge.innerText = key ? "Gemini Key (Active)" : "API Key";
       }
+    }
+
+    // ========================================================================
+    // THỰC ĐƠN TỔNG DÙNG CHUNG + AI TẠO MÓN (client-only, không chạm backend)
+    // Dùng chung kho gốc MS_FULL_MENUS (meal-suggest/full-menus.js) và món AI
+    // localStorage key 'ms_ai_dishes' với module meal-suggest. Món AI chỉ để
+    // tham khảo (sao chép), không ghi vào MealSuggestions / không bấm Chọn.
+    // ========================================================================
+    const MAIN_LS_AI_DISHES = 'ms_ai_dishes';
+    let mainAiDishes = [];
+
+    function mainEscapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function mainLoadAiDishes() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(MAIN_LS_AI_DISHES) || '[]');
+        mainAiDishes = Array.isArray(raw)
+          ? raw.filter((d) => d && d.title && (d.mealType === 'lunch' || d.mealType === 'dinner'))
+          : [];
+      } catch (e) { mainAiDishes = []; }
+    }
+
+    function mainSaveAiDishes() {
+      try { localStorage.setItem(MAIN_LS_AI_DISHES, JSON.stringify(mainAiDishes || [])); } catch (e) {}
+    }
+
+    function mainFullMenuAll() {
+      const base = (typeof MS_FULL_MENUS !== 'undefined' && Array.isArray(MS_FULL_MENUS)) ? MS_FULL_MENUS : [];
+      return base.concat(mainAiDishes || []);
+    }
+
+    // Cùng công thức calo với meal-suggest: cal = targetKcal * cal_pct, C50/P25/F25.
+    function mainEnrichFull(m) {
+      const targetKcal = Number(userProfile.targetKcal) || 1500;
+      const cal = Math.round(targetKcal * (m.cal_pct || 0.40));
+      return Object.assign({}, m, {
+        calories: cal,
+        macros: {
+          carbs: Math.round((cal * 0.50) / 4),
+          protein: Math.round((cal * 0.25) / 4),
+          fat: Math.round((cal * 0.25) / 9)
+        }
+      });
+    }
+
+    function mainSyncAiClearBtn() {
+      const btn = document.getElementById('btn-ai-clear-main');
+      if (!btn) return;
+      const has = mainAiDishes && mainAiDishes.length > 0;
+      btn.classList.toggle('hidden', !has);
+      btn.classList.toggle('flex', has);
+    }
+
+    function mainCopyDish(idx) {
+      const all = mainFullMenuAll();
+      const m = all[idx];
+      if (!m) return;
+      const e = mainEnrichFull(m);
+      const text = `${e.title} (${e.calories} kcal)\n- Món chính: ${e.carb}\n- Món mặn: ${e.protein}\n- Món canh: ${e.soup}\n- Món rau: ${e.veggie}\n- Tráng miệng: ${e.dessert}`;
+      const done = () => showToast('Đã sao chép thực đơn', e.title);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, () => alert('Không sao chép được.'));
+      } else {
+        alert('Trình duyệt không hỗ trợ sao chép nhanh.');
+      }
+    }
+
+    function renderMainFullMenus() {
+      const box = document.getElementById('main-full-options');
+      if (!box) return;
+      mainLoadAiDishes();
+      const all = mainFullMenuAll().map((m, idx) => ({ m: mainEnrichFull(m), idx }))
+        .filter((x) => x.m.mealType === currentMealMode);
+      const countEl = document.getElementById('main-full-count');
+      if (countEl) countEl.innerText = `${all.length} món (${currentMealMode === 'lunch' ? 'trưa' : 'tối'})`;
+      const aiEl = document.getElementById('main-ai-count');
+      if (aiEl) aiEl.innerText = `✨ ${mainAiDishes.length} món AI`;
+      const modeEl = document.getElementById('main-full-mode');
+      if (modeEl) modeEl.innerText = currentMealMode === 'lunch' ? 'Bữa trưa' : 'Bữa tối';
+      mainSyncAiClearBtn();
+      if (all.length === 0) {
+        box.innerHTML = `<div class="col-span-full py-8 text-center bg-white border border-dashed border-slate-200 rounded-2xl text-xs text-slate-400">Chưa có món nào cho bữa này.</div>`;
+        return;
+      }
+      box.innerHTML = all.map(({ m, idx }) => `
+        <div class="border border-slate-200 rounded-2xl p-4 bg-white flex flex-col justify-between gap-3">
+          <div class="space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[11px] font-extrabold px-2 py-0.5 rounded-lg border ${m.ai ? 'bg-violet-50 text-violet-700 border-violet-200' : 'bg-slate-100 text-slate-600 border-slate-200'}">${m.ai ? '✨ AI tạo' : (currentMealMode === 'lunch' ? '☀️ Trưa' : '🌙 Tối')}</span>
+              <span class="text-sm font-black text-slate-800">${m.calories} <span class="text-[11px] font-normal text-slate-400">kcal</span></span>
+            </div>
+            <h5 class="font-extrabold text-[13px] text-slate-800">${mainEscapeHtml(m.title)}</h5>
+            <div class="flex flex-wrap gap-1.5 text-[11px]">
+              <span class="px-2 py-0.5 rounded-lg bg-amber-50 border border-amber-200 font-semibold">🌾 C: <b>${m.macros?.carbs || 0}g</b></span>
+              <span class="px-2 py-0.5 rounded-lg bg-rose-50 border border-rose-200 font-semibold">🥩 P: <b>${m.macros?.protein || 0}g</b></span>
+              <span class="px-2 py-0.5 rounded-lg bg-emerald-50 border border-emerald-200 font-semibold">🥑 F: <b>${m.macros?.fat || 0}g</b></span>
+            </div>
+            <div class="text-[11px] text-slate-600 space-y-1">
+              <div>🍚 <b>Món chính:</b> ${mainEscapeHtml(m.carb)}</div>
+              <div>🥩 <b>Món mặn:</b> ${mainEscapeHtml(m.protein)}</div>
+              <div>🥣 <b>Món canh:</b> ${mainEscapeHtml(m.soup)}</div>
+              <div>🥗 <b>Món rau:</b> ${mainEscapeHtml(m.veggie)}</div>
+              <div>🍌 <b>Tráng miệng:</b> ${mainEscapeHtml(m.dessert)}</div>
+            </div>
+            <p class="text-[11px] text-slate-400 italic">💡 ${mainEscapeHtml(m.nutritionNotes || '')}</p>
+          </div>
+          <button onclick="mainCopyDish(${idx})" class="w-full py-2 rounded-xl text-xs font-bold bg-white border border-slate-200 hover:bg-slate-50">📋 Sao chép</button>
+        </div>`).join('');
+    }
+
+    // AI sáng tạo 3 mâm cơm mới cho bữa đang xem (cần Gemini API Key,
+    // nhập bằng nút "API Key" — dùng chung key nutrifit_gemini_key).
+    async function aiCreateMainDishes() {
+      const key = localStorage.getItem('nutrifit_gemini_key') || '';
+      if (!key) {
+        alert('Cần Gemini API Key để AI tạo món mới — bấm nút "API Key" trên header để nhập.');
+        if (typeof openApiKeyModal === 'function') openApiKeyModal();
+        return;
+      }
+      if (typeof MS_AI_RANK === 'undefined' || !MS_AI_RANK.generateDishes) {
+        alert('Chưa tải được module AI (meal-suggest/ai-rank.js) — kiểm tra kết nối file.');
+        return;
+      }
+      const btn = document.getElementById('btn-ai-create-main');
+      const original = btn ? btn.innerHTML : '';
+      if (btn) {
+        btn.innerHTML = `<i data-lucide="loader" class="w-4 h-4 animate-spin"></i><span>AI đang sáng tạo...</span>`;
+        lucide.createIcons();
+      }
+      try {
+        mainLoadAiDishes();
+        const existing = mainFullMenuAll().map((m) => m.title);
+        const dishes = await MS_AI_RANK.generateDishes(3, currentMealMode, existing, [], key);
+        if (!dishes || dishes.length === 0) {
+          alert('AI không trả về món mới hợp lệ — thử lại sau.');
+          return;
+        }
+        mainAiDishes = (mainAiDishes || []).concat(dishes);
+        mainSaveAiDishes();
+        renderMainFullMenus();
+        const nLunch = dishes.filter((d) => d.mealType === 'lunch').length;
+        const nDinner = dishes.length - nLunch;
+        showToast(`✨ AI đã tạo ${dishes.length} món mới`, `${nLunch} trưa · ${nDinner} tối — đã thêm vào thực đơn tổng dùng chung.`);
+      } finally {
+        if (btn) {
+          btn.innerHTML = original;
+          lucide.createIcons();
+        }
+      }
+    }
+
+    function aiClearMainDishes() {
+      if (!mainAiDishes || mainAiDishes.length === 0) return;
+      if (!confirm('Xóa toàn bộ món do AI tạo (cả module meal-suggest cũng mất)?')) return;
+      mainAiDishes = [];
+      mainSaveAiDishes();
+      renderMainFullMenus();
+      showToast('Đã xóa món AI', 'Thực đơn tổng về lại kho gốc.');
     }
 
     // MODAL LỊCH SỬ THỰC ĐƠN
