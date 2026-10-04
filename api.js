@@ -24,7 +24,7 @@ const NutriFitAPI = {
       });
       return await res.json();
     } catch (e) {
-      return { success: false, message: "Lỗi kết nối máy chủ: " + e.message };
+      return { success: false, message: "Lỗi kết nối máy chủ: " + e.message, isOffline: true };
     }
   },
 

@@ -140,7 +140,12 @@ def login():
     try:
         cnxn = get_db()
         cursor = cnxn.cursor()
-        cursor.execute("SELECT UserId, Email, PasswordHash, FullName FROM Users WHERE Email = ?", email)
+        cursor.execute("""
+            SELECT UserId, Email, PasswordHash, FullName 
+            FROM Users 
+            WHERE LOWER(RTRIM(LTRIM(Email))) = LOWER(?) 
+               OR LOWER(RTRIM(LTRIM(FullName))) = LOWER(?)
+        """, (email, email))
         row = cursor.fetchone()
         
         if not row:
@@ -148,7 +153,7 @@ def login():
             return jsonify({"success": False, "message": "Tài khoản không tồn tại trên CSDL!"}), 404
         
         user_id, user_email, pwd_hash, fullname = row
-        if pwd_hash != password:
+        if (pwd_hash or '').strip() != password.strip():
             cnxn.close()
             return jsonify({"success": False, "message": "Mật khẩu không chính xác!"}), 401
 
